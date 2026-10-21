@@ -69,6 +69,7 @@ rgb_matrix[cursor.x+(cursor.y*8)] = OFF;
             cursor.y -= 1;
         }
             break;
+            //comment test
         case KEY_DOWN: //down 
         if (joystick.value > 0 && cursor.y < 7) {
         cursor.y += 1;
