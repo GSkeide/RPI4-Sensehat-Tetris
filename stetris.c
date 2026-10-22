@@ -77,54 +77,53 @@ gameConfig game = {
 // This function is called on the start of your application
 // Here you can initialize what ever you need for your task
 // return false if something fails, else true
-bool initializeSenseHat()
-{
-
-
-
+bool initializeSenseHat() {
     for(int i = 0; i < 31; ++i) {
         char path[32];
         snprintf(path, sizeof(path), "/dev/fb%d", i); // Store formatted file path address with /dev/fb<i> in path.
-        int fd = open(path, O_RDWR);  // Open /dev/fb<i>, returns file descriptor.
-        if (fd == -1) { // Returns -1 if couldnt open path
-        continue;                                 // This fbN doesn't exist, try the next number
+        int fd = open(path, O_RDWR);                  // Open /dev/fb<i>, returns file descriptor.
+        if (fd == -1) {                               // Returns -1 if couldnt open path
+            continue;                                 // This fbN doesn't exist, try the next number
         }
- // ioctl asks the file (fd) FBIOGEt_FSCREENINFO, and store the result in the sfill struct. 
- // compares the struct we filled's id with the name of fd. both return 0 = success!
+        
+        // Ask the framebuffer for its fixed screen info (FBIOGET_FSCREENINFO), stored in sfill.
+        // ioctl returns 0 on success. strcmp returns 0 when sfill.id equals "RPi-Sense FB",
+        // meaning this framebuffer is the Sense HAT LED matrix.
         if (ioctl(fd, FBIOGET_FSCREENINFO, &sfill) == 0 && strcmp(sfill.id, "RPi-Sense FB") == 0) {
-        fb_fd = fd;  // Found the correct framebuffer, store the file descriptor.
-        break;
-            }
-            close(fd);                                    // Wrong device, close it before trying the next.
+            fb_fd = fd;  // Found the correct framebuffer, store the file descriptor.
+            break;
         }
+            close(fd);                                // Wrong device, close it before trying the next.
+    }
+    
     if (fb_fd == -1) {                                // Loop finished without finding it.
         fprintf(stderr, "Could not find RPi-Sense FB\n");
         return false;
     }
 
     for (int i = 0; i < 31; ++i) {
-    char path[32];
-    snprintf(path, sizeof(path), "/dev/input/event%d", i); // Store formatted file path adress /dev/input/event<i> into path.
+        char path[32];
+        snprintf(path, sizeof(path), "/dev/input/event%d", i); // Store formatted file path adress /dev/input/event<i> into path.
 
-    int fd = open(path, O_RDONLY); // Read only, we never write to the joystick.
-    if (fd == -1) {                // Returns -1 if it couldn't open path.
-        continue;                  // This eventN doesn't exist, try the next number.
-    }
+        int fd = open(path, O_RDONLY);                // Read only, we never write to the joystick.
+        if (fd == -1) {                               // Returns -1 if it couldn't open path.
+            continue;                                 // This eventN doesn't exist, try the next number.
+        }
 
-    // ioctl asks the device (fd) for its name (EVIOCGNAME) and stores it in name.
-    // It returns the length of the name on success, -1 on failure.
-    // strcmp returns 0 when the device's name matches the one we're looking for.
-    char name[256];
-    if (ioctl(fd, EVIOCGNAME(sizeof(name)), name) >= 0 && strcmp(name, "Raspberry Pi Sense HAT Joystick") == 0) {
-        js_fd = fd; // Found the joystick, store the file descriptor.
-        break;
+        // ioctl asks the device (fd) for its name (EVIOCGNAME) and stores it in name.
+        // It returns the length of the name on success, -1 on failure.
+        // strcmp returns 0 when the device's name matches the one we're looking for.
+        char name[256];
+        if (ioctl(fd, EVIOCGNAME(sizeof(name)), name) >= 0 && strcmp(name, "Raspberry Pi Sense HAT Joystick") == 0) {
+            js_fd = fd;                              // Found the joystick, store the file descriptor.
+            break;
+        }
+        close(fd);                                   // Wrong device, close it before trying the next.
     }
-    close(fd); // Wrong device, close it before trying the next.
-}
-if (js_fd == -1) { // loop finished without finding the joystick corresponding to name
-    fprintf(stderr, "Could not find Raspberry Pi Sense HAT Joystick\n");
-    return false;
-}
+    if (js_fd == -1) {                               // loop finished without finding the joystick corresponding to name
+        fprintf(stderr, "Could not find Raspberry Pi Sense HAT Joystick\n");
+        return false;
+    }
 
     // memory map the framebuffer, so writing rgb_matrix[i] changes the pixel directly.
     // MAP_SHARED make writing go to the real device, not a private copy
@@ -176,7 +175,7 @@ int readSenseHatJoystick()
             break;   // read failed, stop
         } // Is event from joystick &&  is it a press       || or is it held        && self explanatory
         if (joystick.type == EV_KEY && (joystick.value == 1 || (joystick.value == 2 && joystick.code != KEY_UP))) {
-            key = joystick.code; // excluding key_up while held to make pausing feel nicer
+            key = joystick.code; // All keys can be held, except for KEY_UP; which makes pausing feel nicer.
         }
     }
 
