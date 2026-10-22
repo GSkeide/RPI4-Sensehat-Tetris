@@ -4,10 +4,14 @@
 #include <termios.h>
 #include <sys/select.h>
 #include <linux/input.h>
+#include <fcntl.h>
+#include <sys/mman.h>
 #include <stdbool.h>
 #include <string.h>
 #include <time.h>
 #include <poll.h>
+#include <sys/ioctl.h>
+#include <linux/fb.h>
 
 // The game state can be used to detect what happens on the playfield
 #define GAMEOVER 0
@@ -17,12 +21,22 @@
 #define PAUSED (1 << 3)
 //#define Raspberry Pi Sense HAT Joystick
 //#define Pi-Sense FB
+int fb_fd = -1;
+int js_fd = -1;
+unsigned short *rgb_matrix = NULL;
+struct input_event joystick;
+struct fb_fix_screeninfo sfill; // this struct has a char id array which will store the "name" of files we open so we can compare them
+const unsigned short RED = 0xF800;
+const unsigned short OFF = 0x0000;
+unsigned short colorarray[6];
+
 
 // If you extend this structure, either avoid pointers or adjust
 // the game logic allocate/deallocate and reset the memory
 typedef struct
 {
     bool occupied;
+    unsigned short color; // color for tiles
 } tile;
 
 typedef struct
@@ -66,7 +80,75 @@ gameConfig game = {
 // return false if something fails, else true
 bool initializeSenseHat()
 {
+
+colorarray[0] = 0xF800;
+colorarray[1] = 0x07E0;
+colorarray[2] = 0x001F;
+colorarray[3] = 0xFFE0;
+colorarray[4] = 0x07FF;
+colorarray[5] = 0xF81F;
+
+
+
+    for(int i = 0; i < 31; ++i) {
+        char path[32]; // just need to hold the file path string, can be lower than 32
+        snprintf(path, sizeof(path), "/dev/fb%d", i); // store formatted file path string with /dev/fb<i>
+        int fd = open(path, O_RDWR);  // open /dev/fb<i>, returns file descriptor for my code
+        if (fd == -1) { // returns -1 if couldnt open path
+        continue;                                 // this fbN doesn't exist, try the next number
+        }
+ // ioctl asks the file (fd) FBIOGEt_FSCREENINFO, and store the result in the sfill struct. 
+ // compares the struct we filled's id with the name of fd. both return 0 = success!
+        if (ioctl(fd, FBIOGET_FSCREENINFO, &sfill) == 0 && strcmp(sfill.id, "RPi-Sense FB") == 0) {
+        fb_fd = fd;
+        break;
+            }
+            close(fd);                                    // wrong device, close it before trying the next
+        }
+    if (fb_fd == -1) {                                // loop finished without finding it
+        fprintf(stderr, "Could not find RPi-Sense FB\n");
+        return false;
+    }
+
+    for (int i = 0; i < 31; ++i) {
+    char path[32]; // just needs to hold the file path string, can be lower than 32
+    snprintf(path, sizeof(path), "/dev/input/event%d", i); // store formatted file path string /dev/input/event<i>
+
+    int fd = open(path, O_RDONLY); // read only, we never write to the joystick
+    if (fd == -1) {                // returns -1 if it couldn't open path
+        continue;                  // this eventN doesn't exist, try the next number
+    }
+
+    // ioctl asks the device (fd) for its name (EVIOCGNAME) and stores it in name.
+    // It returns the length of the name on success, -1 on failure.
+    // strcmp returns 0 when the device's name matches the one we're looking for.
+    char name[256];
+    if (ioctl(fd, EVIOCGNAME(sizeof(name)), name) >= 0 && strcmp(name, "Raspberry Pi Sense HAT Joystick") == 0) {
+        js_fd = fd; // found it, keep this file descriptor
+        break;
+    }
+    close(fd); // wrong device, close it before trying the next
+}
+if (js_fd == -1) { // loop finished without finding it
+    fprintf(stderr, "Could not find Raspberry Pi Sense HAT Joystick\n");
+    return false;
+}
+
+  // memory map the framebuffer, so writing rgb_matrix[i] changes the pixel directly.
+    // MAP_SHARED make writing go to the real device, not a private copy
+    rgb_matrix = mmap(NULL, 128, PROT_READ | PROT_WRITE, MAP_SHARED, fb_fd, 0);
+    if (rgb_matrix == MAP_FAILED) {
+        perror("mmap fb");
+        return false;
+    }
+
+    // clear all 64 pixels
+    for (int i = 0; i < 64; ++i) {
+        rgb_matrix[i] = OFF;
+    }
+
     return true;
+
 }
 
 // This function is called when the application exits
@@ -82,7 +164,22 @@ void freeSenseHat()
 // !!! when nothing was pressed you MUST return 0 !!!
 int readSenseHatJoystick()
 {
-    return 0;
+
+    struct pollfd pollJoystick = {
+        .fd = js_fd,
+        .events = POLLIN};
+    int key = 0;
+    while (poll(&pollJoystick, 1, 0) > 0) {
+        if (read(js_fd, &joystick, sizeof(joystick)) != sizeof(joystick)) {
+            break;           // read failed, stop
+        }
+        if (joystick.type == EV_KEY && (joystick.value == 1 || (joystick.value == 2 && joystick.code != KEY_UP))) {
+            key = joystick.code; // excluding key_up while value is 2 to make pausing feel nicer
+        }
+    }
+
+
+    return key;
 }
 
 // This function should render the gamefield on the LED matrix. It is called
@@ -90,7 +187,24 @@ int readSenseHatJoystick()
 // has changed the playfield
 void renderSenseHatMatrix(bool const playfieldChanged)
 {
-    (void)playfieldChanged;
+
+    if (!playfieldChanged)
+        return;
+
+
+    for (unsigned int y = 0; y < game.grid.y; y++)
+    {
+        for (unsigned int x = 0; x < game.grid.x; x++)
+        {
+ 
+            if (game.playfield[y][x].occupied) {
+                rgb_matrix[x+y*8] = game.playfield[y][x].color;
+            } else {
+                rgb_matrix[x+y*8] = OFF;
+            }
+        }
+    }
+
 }
 
 // The game logic uses only the following functions to interact with the playfield.
@@ -100,6 +214,7 @@ void renderSenseHatMatrix(bool const playfieldChanged)
 static inline void newTile(coord const target)
 {
     game.playfield[target.y][target.x].occupied = true;
+    game.playfield[target.y][target.x].color = colorarray[rand() % 6];
 }
 
 static inline void copyTile(coord const to, coord const from)
@@ -376,6 +491,8 @@ exit:
     return 0;
 }
 
+
+
 void renderConsole(bool const playfieldChanged)
 {
     if (!playfieldChanged)
@@ -485,7 +602,7 @@ int main(int argc, char **argv)
             // reading the inputs from stdin. However, we expect you to read the inputs directly
             // from the input device and not from stdin (you should implement the readSenseHatJoystick
             // method).
-             key = readKeyboard();
+            // key = readKeyboard();
         }
         if (key == KEY_ENTER)
             break;
