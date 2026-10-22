@@ -15,7 +15,8 @@
 #define ROW_CLEAR (1 << 1)
 #define TILE_ADDED (1 << 2)
 #define PAUSED (1 << 3)
-#define JS Raspberry Pi SenseHAT Joystick
+//#define Raspberry Pi Sense HAT Joystick
+//#define Pi-Sense FB
 
 // If you extend this structure, either avoid pointers or adjust
 // the game logic allocate/deallocate and reset the memory
